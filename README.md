@@ -2,10 +2,10 @@
 
 Prevê o valor futuro de recompra de clientes de um varejista online, comparando Regressão Linear Múltipla e Regressão Ridge sobre atributos RFM (Recência, Frequência, Monetário).
 
-**EQUIPE**: Thiago Dallo, Vinicius Fabris e Murilo Cambruzzi.
-**DISCIPLINA:** Machine Learning
-**CURSO:** Engenharia de Software - 4ª fase
-**FACULDADE:** UniSATC
+- **EQUIPE**: Thiago Dallo, Vinicius Fabris e Murilo Cambruzzi.
+- **DISCIPLINA:** Machine Learning
+- **CURSO:** Engenharia de Software - 4ª fase
+- **FACULDADE:** UniSATC
 
 ## Tecnologias
 
