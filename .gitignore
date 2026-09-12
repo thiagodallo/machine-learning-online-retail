@@ -1,0 +1,9 @@
+data/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# scripts internos usados para gerar o notebook e o relatório, não fazem parte da análise
+build_notebook.py
+build_report.py
+plots.py
