@@ -11,7 +11,7 @@ from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
 from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score, mean_absolute_error,
                              mean_squared_error, precision_score, r2_score, recall_score,
-                             roc_auc_score, balanced_accuracy_score)
+                             roc_auc_score, balanced_accuracy_score, average_precision_score)
 from sklearn.model_selection import (GridSearchCV, KFold, RepeatedKFold, StratifiedKFold,
                                      cross_val_predict, cross_validate, train_test_split)
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
@@ -314,6 +314,9 @@ def metricas_classificacao(y_true, y_pred, score):
         'F1': f1_score(y_true, y_pred),
         'F1_macro': f1_score(y_true, y_pred, average='macro'),
         'ROC_AUC': roc_auc_score(y_true, score) if len(np.unique(score)) > 1 else 0.5,
+        # PR-AUC (precisão média): área sob a curva precisão x recall. Sem poder de ordenação,
+        # fica igual à proporção de positivos, então a referência aqui é ~0,57 e não 0,5.
+        'PR_AUC': average_precision_score(y_true, score) if len(np.unique(score)) > 1 else float(np.mean(y_true)),
         'matriz_confusao': [[int(tn), int(fp)], [int(fn), int(tp)]],
     }
 
@@ -406,9 +409,11 @@ for nome, com_log, com_escala in [('Sem pré-processamento', False, False),
 
 # AUC do RFM manual na mesma validação cruzada do treino (quintis refeitos a cada rodada)
 auc_cv_rfm = []
+score_cv_rfm = np.zeros(len(X_train))
 for idx_tr, idx_va in cv_estratificada.split(X_train, y_cls_train):
     rfm_fold = ScoreRFM().fit(X_train.iloc[idx_tr], y_cls_train.iloc[idx_tr])
-    auc_cv_rfm.append(roc_auc_score(y_cls_train.iloc[idx_va], rfm_fold.pontuar(X_train.iloc[idx_va])))
+    score_cv_rfm[idx_va] = rfm_fold.pontuar(X_train.iloc[idx_va])
+    auc_cv_rfm.append(roc_auc_score(y_cls_train.iloc[idx_va], score_cv_rfm[idx_va]))
 
 # diferenças de AUC no teste, com intervalo de 95% por bootstrap (2.000 reamostragens do teste)
 rng = np.random.default_rng(RANDOM_STATE)
@@ -437,6 +442,86 @@ for limiar in limiares_candidatos:
         'f1': float(f1_score(y_cls_train, pred_limiar)),
         'pct_clientes_acionados': float(pred_limiar.mean() * 100),
     })
+
+# ------------------------------------------------------------------
+# Limiar pelo custo do erro (Aulas 3, 5 e 7): cenário de campanha
+# ------------------------------------------------------------------
+# A acurácia balanceada trata falso positivo e falso negativo como igualmente ruins.
+# Numa campanha real eles custam diferente: contatar quem não ia comprar desperdiça o
+# custo do contato (FP), e deixar de contatar quem ia comprar perde o retorno (FN).
+# Premissas (hipotéticas, o dataset não traz custo nem margem):
+#   - retorno por acerto (VP): £25, cerca de 10% de margem sobre um pedido típico
+#     (ticket médio mediano do histórico ≈ £228);
+#   - custo por contato: três cenários, de um e-mail com cupom a uma abordagem comercial.
+# Lucro da campanha = 25 × VP − custo × (VP + FP). Com probabilidades bem calibradas,
+# o limiar ótimo é custo / retorno (Bult e Wansbeek, 1995). O limiar de cada modelo é
+# escolhido pelo maior lucro nas previsões de validação cruzada do treino e só depois
+# aplicado ao teste, como na escolha anterior.
+RETORNO_POR_ACERTO = 25.0
+CENARIOS_CUSTO = {'E-mail com cupom': 5.0, 'Catálogo impresso': 12.5, 'Contato comercial': 17.5}
+
+
+def lucro_campanha(y_true, acionar, custo, retorno=RETORNO_POR_ACERTO):
+    y_true = np.asarray(y_true)
+    acionar = np.asarray(acionar).astype(bool)
+    vp = int((acionar & (y_true == 1)).sum())
+    contatados = int(acionar.sum())
+    return retorno * vp - custo * contatados, vp, contatados
+
+
+def melhor_corte(y_true, score, candidatos, custo):
+    lucros = [lucro_campanha(y_true, score >= c, custo)[0] for c in candidatos]
+    return float(candidatos[int(np.argmax(lucros))]), lucros
+
+
+notas_rfm = np.arange(3, 16)
+estrategias_teste = {
+    'Contatar todos': (np.ones(len(y_cls_test)), None, None),
+    'RFM manual (quintis)': (score_rfm, score_cv_rfm, notas_rfm),
+    'Modelo C (Regressão Logística)': (prob_logistica, prob_cv_logistica, limiares_candidatos),
+    'Modelo D (KNN)': (prob_knn, prob_cv_knn, limiares_candidatos),
+}
+cenarios_lucro = {}
+for nome_cenario, custo in CENARIOS_CUSTO.items():
+    linha = {'custo_por_contato': custo, 'limiar_teorico': custo / RETORNO_POR_ACERTO, 'estrategias': {}}
+    for nome, (score_teste, score_cv, candidatos) in estrategias_teste.items():
+        if candidatos is None:
+            corte, acionar = None, np.ones(len(y_cls_test), dtype=bool)
+        else:
+            corte, _ = melhor_corte(y_cls_train, score_cv, candidatos, custo)
+            acionar = score_teste >= corte
+        lucro, vp, contatados = lucro_campanha(y_cls_test, acionar, custo)
+        linha['estrategias'][nome] = {
+            'corte': corte,
+            'lucro_teste': float(lucro),
+            'clientes_contatados': contatados,
+            'pct_contatados': float(100 * contatados / len(y_cls_test)),
+            'recompras_alcancadas': vp,
+            'pct_recompras_alcancadas': float(100 * vp / int(y_cls_test.sum())),
+        }
+    # referência de teto: contatar só quem de fato recomprou (informação perfeita)
+    linha['lucro_teto_informacao_perfeita'] = float((RETORNO_POR_ACERTO - custo) * int(y_cls_test.sum()))
+    cenarios_lucro[nome_cenario] = linha
+
+# a diferença de lucro entre Logística e RFM manual é real ou ruído do teste? (bootstrap)
+rng_lucro = np.random.default_rng(RANDOM_STATE)
+for nome_cenario, custo in CENARIOS_CUSTO.items():
+    est = cenarios_lucro[nome_cenario]['estrategias']
+    acionar_log = prob_logistica >= est['Modelo C (Regressão Logística)']['corte']
+    acionar_rfm = score_rfm >= est['RFM manual (quintis)']['corte']
+    difs = []
+    for _ in range(2000):
+        idx = rng_lucro.integers(0, len(y_teste_array), len(y_teste_array))
+        difs.append(lucro_campanha(y_teste_array[idx], acionar_log[idx], custo)[0]
+                    - lucro_campanha(y_teste_array[idx], acionar_rfm[idx], custo)[0])
+    cenarios_lucro[nome_cenario]['ic95_lucro_logistica_menos_rfm'] = [float(v) for v in np.percentile(difs, [2.5, 97.5])]
+
+# curva de lucro por limiar da Regressão Logística (validação cruzada no treino), por cenário
+curva_lucro_logistica = {
+    nome_cenario: [float(v / len(y_cls_train))
+                   for v in melhor_corte(y_cls_train, prob_cv_logistica, limiares_candidatos, custo)[1]]
+    for nome_cenario, custo in CENARIOS_CUSTO.items()
+}
 
 # interpretação da Regressão Logística: coeficientes padronizados e razão de chances
 modelo_logistica = busca_logistica.best_estimator_
@@ -490,6 +575,12 @@ classificacao = {
     'analise_limiar_logistica_cv': analise_limiar,
     'coeficientes_logistica': coeficientes_logistica,
     'auditoria_knn': auditoria_knn,
+    'lucro_campanha': {
+        'retorno_por_acerto': RETORNO_POR_ACERTO,
+        'cenarios': cenarios_lucro,
+        'limiares_da_curva': [float(v) for v in limiares_candidatos],
+        'curva_lucro_por_cliente_logistica_cv': curva_lucro_logistica,
+    },
 }
 
 # ------------------------------------------------------------------
@@ -562,8 +653,10 @@ resumo = {
     'regressao_teste': {k: v for k, v in results.items() if k in ('ModeloA_LinearMultipla', 'ModeloB_Ridge', 'KNN_Regressor')},
     'regressao_cv_treino': {k: {m: v[m] for m in ('MAE_media', 'MAE_dp', 'R2_media')}
                             for k, v in robustez_regressao.items() if isinstance(v, dict)},
-    'classificacao_teste': {k: {m: round(v[m], 4) for m in ('Acuracia', 'F1', 'F1_macro', 'ROC_AUC')}
+    'classificacao_teste': {k: {m: round(v[m], 4) for m in ('Acuracia', 'F1', 'F1_macro', 'ROC_AUC', 'PR_AUC')}
                             for k, v in classificacao_teste.items()},
     'validacao_temporal_auc': {k: round(v['ROC_AUC'], 4) for k, v in validacao_temporal['resultados'].items()},
+    'lucro_teste': {c: {e: round(v['lucro_teste']) for e, v in d['estrategias'].items()}
+                    for c, d in cenarios_lucro.items()},
 }
 print(json.dumps(resumo, indent=2, ensure_ascii=False, default=str))
