@@ -144,8 +144,3 @@ O script baixa o dataset na primeira execução (pasta `data/`, ignorada pelo Gi
 7. Rode a seção 13 para a validação cruzada repetida e o KNN Regressor.
 8. Rode a seção 14 para a classificação: baselines, Regressão Logística, KNN, escolha do limiar, avaliação no teste, interpretação e validação temporal.
 9. Leia a seção **Análise Crítica e Conclusão**, no fim do notebook, para a interpretação dos resultados.
-
-## Próximos passos
-
-- Segmentação dos clientes com K-Means sobre as mesmas variáveis RFM, quando o conteúdo for visto em aula.
-- Novas variáveis para passar do teto de AUC em torno de 0,75: sazonalidade, categoria dos produtos, país e intervalo médio entre compras.
