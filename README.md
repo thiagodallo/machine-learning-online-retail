@@ -25,6 +25,7 @@ Prevê, para cada cliente de um varejista online, quanto ele vai gastar nos pró
 - **Robustez da regressão**: repete a validação cruzada 25 vezes no treino (5 partes x 5 repetições) e inclui o KNN Regressor, para checar se a comparação do teste se sustenta.
 - **Classificação, Modelo C x Modelo D**: prevê se o cliente recompra com Regressão Logística e KNN, ambos com log e padronização dentro de um `Pipeline`, hiperparâmetros escolhidos por ROC-AUC na validação cruzada e limiar de decisão escolhido sem olhar o teste.
 - **Baselines honestos**: compara os modelos com "todo mundo recompra" e com o score RFM manual em quintis (Hughes, 1994), que é como o mercado resolve o problema sem Machine Learning.
+- **Limiar pelo custo do erro**: simula uma campanha em três níveis de custo por contato e escolhe o limiar de cada modelo pelo maior lucro na validação cruzada, comparando com "contatar todos" e com o RFM manual.
 - **Validação temporal**: treina com um trimestre anterior e testa no trimestre seguinte, como o modelo seria usado na prática.
 
 ## O problema
@@ -81,13 +82,29 @@ Conjunto de teste (os mesmos 676 clientes):
 | F1 (classe recomprou) | 0,727 | 0,690 | 0,685 | 0,686 |
 | F1-macro | 0,363 | 0,677 | 0,683 | 0,676 |
 | ROC-AUC | 0,500 | 0,736 | 0,749 | 0,746 |
+| PR-AUC | 0,571 | 0,798 | 0,823 | 0,817 |
 
 - Regressão Logística e KNN ficam tecnicamente empatados: o intervalo de 95% da diferença de AUC (bootstrap no teste) contém zero. A Logística é o modelo final da classificação, por ter o melhor equilíbrio entre as classes e coeficientes interpretáveis.
 - O RFM manual chega muito perto (AUC de 0,745 na validação cruzada, contra 0,746 da Logística e 0,749 do KNN). O ganho do Machine Learning aqui é pequeno na ordenação dos clientes. O valor está na probabilidade por cliente, que permite escolher o limiar pelo custo da campanha.
 - "Todo mundo recompra" tem o maior F1 da classe positiva e AUC de 0,5. É o motivo de o projeto não avaliar classificação só por acurácia ou pelo F1 de uma classe.
 - Na validação temporal (treino no trimestre anterior), as AUCs se mantêm (0,746 da Logística, 0,743 do KNN e 0,738 do RFM manual), mas a taxa de recompra sobe de 49% para 57% com a temporada de Natal. O modelo continua útil, desde que as probabilidades e o limiar sejam recalibrados a cada período.
 
-A análise crítica completa está no relatório e nas seções 12, 13 e 15 do notebook.
+### Limiar pelo custo: quanto a campanha lucra
+
+Cenário hipotético: cada cliente contatado que recompra traz £25 de margem, e o custo por contato varia. O limiar de cada modelo é o de maior lucro na validação cruzada do treino; a tabela mostra o lucro no teste (676 clientes) e, entre parênteses, a fatia de clientes contatados.
+
+| Estratégia | E-mail com cupom (£5) | Catálogo impresso (£12,50) | Contato comercial (£17,50) |
+|------------|-----------------------|----------------------------|----------------------------|
+| Contatar todos | £6.270 (100%) | £1.200 (100%) | −£2.180 (100%) |
+| RFM manual (quintis) | £6.270 (100%) | £2.038 (55%) | £725 (33%) |
+| Modelo C (Regressão Logística) | £6.280 (100%) | £2.100 (55%) | £830 (32%) |
+| Modelo D (KNN) | £6.265 (99%) | £2.050 (59%) | £785 (32%) |
+
+- Com contato barato, vale acionar praticamente todos. Com contato caro, acionar todos dá prejuízo, e os modelos transformam a campanha em lucro.
+- Os limiares escolhidos para a Logística (0,15, 0,53 e 0,68) ficam perto da regra teórica custo ÷ retorno (0,20, 0,50 e 0,70), sinal de probabilidades bem calibradas.
+- A vantagem da Logística sobre o RFM manual (£62 e £105) não é significativa: o intervalo de 95% por bootstrap contém zero. O grande ganho vem de escolher o corte pelo custo, e a probabilidade da Logística permite saber esse corte de antemão.
+
+A análise crítica completa está no relatório e nas seções 12, 13, 14.8 e 15 do notebook.
 
 ## Como rodar
 
